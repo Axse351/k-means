@@ -14,7 +14,7 @@ export const adminMenu: MenuSection[] = [
   {
     section: 'Clustering',
     items: [
-      { label: 'Proses K-Means', href: '/admin/clustering/proses' },
+      { label: 'Proses K-Means', href: '/admin/clustering' },
       { label: 'Hasil Analisis', href: '/admin/clustering/hasil' },
       { label: 'Laporan', href: '/admin/clustering/laporan' },
     ],
