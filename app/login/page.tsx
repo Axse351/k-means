@@ -16,7 +16,7 @@ export default async function Login({
       <div className="w-96 p-6 rounded-lg shadow bg-white">
 
         <h1 className="text-2xl font-bold mb-5">
-          Login
+          Loginn
         </h1>
 
         {error && (
@@ -46,7 +46,7 @@ export default async function Login({
           <button
             className="bg-blue-600 text-white w-full p-2 rounded"
           >
-            Login
+            Logi
           </button>
 
         </form>

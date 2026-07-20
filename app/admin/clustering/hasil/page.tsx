@@ -1,6 +1,7 @@
 import { getClusteringResult } from '@/lib/actions/clustering'
 import ClusteringCharts from '@/components/ClusteringCharts'
 import Link from 'next/link'
+import ClusteringDetailCharts from '@/components/ClusteringDetailCharts'
 
 const PAGE_SIZE = 10
 const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6']
@@ -38,6 +39,7 @@ export default async function ClusteringHasilPage({
 
   const { run, results, centroids } = data
   const allResults = results as any[]
+  const excludedData = (run.excluded_data as any[]) ?? []
 
   // ── Distribusi cluster (untuk pie chart) ──
   const distribusi: Record<number, number> = {}
@@ -45,7 +47,7 @@ export default async function ClusteringHasilPage({
   const distribusiData = Object.entries(distribusi)
     .sort((a, b) => Number(a[0]) - Number(b[0]))
     .map(([clusterIdx, jumlah]) => ({
-      cluster: `Cluster ${Number(clusterIdx) + 1}`,
+      cluster: allResults.find((r) => r.cluster === Number(clusterIdx))?.label ?? `Cluster ${Number(clusterIdx) + 1}`,
       jumlah,
       persentase: Math.round((jumlah / allResults.length) * 100),
     }))
@@ -57,9 +59,12 @@ export default async function ClusteringHasilPage({
     if (!perProdiMap[p]) perProdiMap[p] = {}
     perProdiMap[p][r.cluster] = (perProdiMap[p][r.cluster] ?? 0) + 1
   }
+  const clusterLabels = Array.from({ length: run.k }, (_, i) => {
+    return allResults.find((r) => r.cluster === i)?.label ?? `Cluster ${i + 1}`
+  })
   const perProdiData = Object.entries(perProdiMap).map(([p, clusters]) => ({
     prodi: p,
-    ...Object.fromEntries(Array.from({ length: run.k }, (_, i) => [`Cluster ${i + 1}`, clusters[i] ?? 0])),
+    ...Object.fromEntries(clusterLabels.map((label, i) => [label, clusters[i] ?? 0])),
   }))
 
   // ── Centroid: nilai asli + versi ternormalisasi 0-100 untuk radar chart ──
@@ -78,8 +83,8 @@ export default async function ClusteringHasilPage({
 
     const row: any = { variabel }
     rawValues.forEach((val, i) => {
-      row[`Cluster ${i + 1}`] = Number((((val - min) / range) * 100).toFixed(1))
-      row[`Cluster ${i + 1}__raw`] = Number(val.toFixed(2))
+      row[clusterLabels[i]] = Number((((val - min) / range) * 100).toFixed(1))
+      row[`${clusterLabels[i]}__raw`] = Number(val.toFixed(2))
     })
     return row
   })
@@ -125,7 +130,7 @@ export default async function ClusteringHasilPage({
         </p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <StatCard label="Total Sampel" value={run.jumlah_data} />
         <StatCard label="Jumlah Cluster" value={run.k} />
         <StatCard
@@ -133,10 +138,73 @@ export default async function ClusteringHasilPage({
           value={run.silhouette_score?.toFixed(3) ?? '-'}
           hint={silhouetteHint(run.silhouette_score)}
         />
-        <StatCard label="SSE" value={run.sse?.toFixed(2) ?? '-'} />
+        <StatCard
+          label="Davies-Bouldin Index"
+          value={run.dbi_score?.toFixed(4) ?? '-'}
+          hint={dbiHint(run.dbi_score)}
+        />
+        <StatCard label="Data Dikecualikan" value={excludedData.length} />
       </div>
 
       <ClusteringCharts distribusi={distribusiData} perProdi={perProdiData} radar={radarData} k={run.k} />
+{(() => {
+  const table = run.tipe === 'akademik' ? 'data_akademik' : 'data_non_akademik'
+  const detailRows = allResults.map((r: any) => {
+    const rel = Array.isArray(r.mahasiswa?.[table]) ? r.mahasiswa[table][0] : r.mahasiswa?.[table]
+    const values: Record<string, number> = {}
+    for (const v of run.variabel as string[]) {
+      values[v] = rel ? Number(rel[v]) : NaN
+    }
+    return {
+      cluster: r.cluster,
+      label: r.label ?? `Cluster ${r.cluster + 1}`,
+      values,
+      nama: r.mahasiswa?.nama ?? '-',
+      jenisKelamin: r.mahasiswa?.jenis_kelamin,
+    }
+  })
+
+  return (
+    <ClusteringDetailCharts
+      variabelList={run.variabel as string[]}
+      rows={detailRows}
+      k={run.k}
+    />
+  )
+})()}
+      {/* ── Data yang dikecualikan karena tidak lengkap ── */}
+      {excludedData.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl mt-6 p-5">
+          <h3 className="font-semibold text-amber-900 mb-1">
+            ⚠️ Data Dikecualikan dari Proses ({excludedData.length})
+          </h3>
+          <p className="text-xs text-amber-700 mb-3">
+            Mahasiswa berikut tidak diikutkan dalam clustering karena datanya belum lengkap.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-amber-800">
+                <tr>
+                  <th className="py-1.5 pr-4">NIM</th>
+                  <th className="py-1.5 pr-4">Nama</th>
+                  <th className="py-1.5 pr-4">Prodi</th>
+                  <th className="py-1.5">Sebab</th>
+                </tr>
+              </thead>
+              <tbody>
+                {excludedData.map((ex: any, i: number) => (
+                  <tr key={i} className="border-t border-amber-200">
+                    <td className="py-1.5 pr-4">{ex.nim}</td>
+                    <td className="py-1.5 pr-4">{ex.nama}</td>
+                    <td className="py-1.5 pr-4">{ex.prodi}</td>
+                    <td className="py-1.5 text-amber-700">{ex.sebab}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ── Tabel hasil dengan filter + pagination ── */}
       <div className="bg-white border border-gray-200 rounded-xl mt-6 overflow-hidden">
@@ -159,8 +227,8 @@ export default async function ClusteringHasilPage({
             </select>
             <select name="cluster" defaultValue={cluster ?? ''} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm">
               <option value="">Semua Cluster</option>
-              {Array.from({ length: run.k }, (_, i) => (
-                <option key={i} value={i}>Cluster {i + 1}</option>
+              {clusterLabels.map((label, i) => (
+                <option key={i} value={i}>{label}</option>
               ))}
             </select>
             <button className="bg-gray-900 text-white px-4 py-1.5 rounded-lg text-sm font-medium">Filter</button>
@@ -174,7 +242,7 @@ export default async function ClusteringHasilPage({
               <th className="p-3">Nama</th>
               <th className="p-3">Prodi</th>
               <th className="p-3">Angkatan</th>
-              <th className="p-3">Cluster</th>
+              <th className="p-3">Kategori</th>
             </tr>
           </thead>
           <tbody>
@@ -189,7 +257,7 @@ export default async function ClusteringHasilPage({
                     className="px-2.5 py-1 rounded-full text-xs font-medium text-white"
                     style={{ backgroundColor: COLORS[r.cluster % COLORS.length] }}
                   >
-                    Cluster {r.cluster + 1}
+                    {r.label ?? `Cluster ${r.cluster + 1}`}
                   </span>
                 </td>
               </tr>
@@ -258,4 +326,11 @@ function silhouetteHint(score?: number | null) {
   if (score >= 0.5) return 'Struktur cluster cukup baik'
   if (score >= 0.25) return 'Struktur cluster lemah'
   return 'Cluster tumpang tindih'
+}
+
+function dbiHint(dbi?: number | null) {
+  if (dbi === null || dbi === undefined) return undefined
+  if (dbi < 0.5) return 'Kualitas cluster sangat baik'
+  if (dbi <= 1) return 'Kualitas cluster baik'
+  return 'Kualitas cluster kurang baik'
 }

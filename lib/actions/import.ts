@@ -36,22 +36,24 @@ export async function importAkademikBulk(rows: CsvRow[]) {
       continue
     }
 
-    const { error: akademikError } = await supabase.from('data_akademik').upsert(
-      {
-        mahasiswa_id: mhs.id,
-        ipk: toNum(row['IPK']),
-        ips1: toNum(row['IPS1']),
-        ips2: toNum(row['IPS2']),
-        ips3: toNum(row['IPS3']),
-        ips4: toNum(row['IPS4']),
-        ips5: toNum(row['IPS5']),
-        ips6: toNum(row['IPS6']),
-        ips7: toNum(row['IPS7']),
-        ips8: toNum(row['IPS8']),
-        sks_ditempuh: toNum(row['SKS ditempuh']),
-      },
-      { onConflict: 'mahasiswa_id' }
-    )
+   const { error: akademikError } = await supabase.from('data_akademik').upsert(
+  {
+    mahasiswa_id: mhs.id,
+    ipk: toNum(row['IPK']),
+    ips1: toNum(row['IPS1']),
+    ips2: toNum(row['IPS2']),
+    ips3: toNum(row['IPS3']),
+    ips4: toNum(row['IPS4']),
+    ips5: toNum(row['IPS5']),
+    ips6: toNum(row['IPS6']),
+    ips7: toNum(row['IPS7']),
+    ips8: toNum(row['IPS8']),
+    sks_ditempuh: toNum(row['SKS ditempuh']),
+    ips_terakhir: toNum(row['IPS Terakhir']),
+    rata_rata_kehadiran: toNum(row['Rata-rata Kehadiran']),
+  },
+  { onConflict: 'mahasiswa_id' }
+)
 
     if (akademikError) errors.push(`NIM ${nim}: ${akademikError.message}`)
     else success++

@@ -17,6 +17,7 @@ export interface KMeansResult {
   iterations: number
   sse: number
   silhouetteScore: number
+  daviesBouldinIndex: number
   normalization: { method: NormalizationMethod; params: any }
 }
 
@@ -33,24 +34,22 @@ function normalizeMinMax(data: number[][]) {
   const nCols = data[0].length
   const min = new Array(nCols).fill(Infinity)
   const max = new Array(nCols).fill(-Infinity)
-
   for (const row of data) {
     for (let j = 0; j < nCols; j++) {
       if (row[j] < min[j]) min[j] = row[j]
       if (row[j] > max[j]) max[j] = row[j]
     }
   }
-
   const normalized = data.map((row) =>
     row.map((val, j) => {
       const range = max[j] - min[j]
       return range === 0 ? 0 : (val - min[j]) / range
     })
   )
-
   return { normalized, params: { min, max } }
 }
 
+// Setara StandardScaler (Z-Score) di sklearn Python
 function normalizeZScore(data: number[][]) {
   const nCols = data[0].length
   const mean = new Array(nCols).fill(0)
@@ -94,8 +93,7 @@ function initRandom(data: number[][], k: number, rand: () => number): number[][]
 }
 
 function initKMeansPlusPlus(data: number[][], k: number, rand: () => number): number[][] {
-  const centroids: number[][] = [[...data[Math.floor(rand() * data.length)]]][0] ? [[...data[Math.floor(rand() * data.length)]]] : []
-  centroids.length = 0
+  const centroids: number[][] = []
   centroids.push([...data[Math.floor(rand() * data.length)]])
 
   while (centroids.length < k) {
@@ -111,7 +109,6 @@ function initKMeansPlusPlus(data: number[][], k: number, rand: () => number): nu
     }
     centroids.push([...data[chosenIdx]])
   }
-
   return centroids
 }
 
@@ -146,22 +143,37 @@ function computeSilhouette(data: number[][], assignments: number[], k: number): 
   return scores.reduce((a, b) => a + b, 0) / scores.length
 }
 
-export function runKMeans(rawData: number[][], options: KMeansOptions): KMeansResult {
-  const { k, normalization = 'minmax', init = 'kmeans++', maxIterations = 100, tolerance = 1e-4, seed = 42 } = options
+// Davies-Bouldin Index — makin kecil makin baik (mendekati 0 = sangat baik)
+function computeDaviesBouldin(data: number[][], assignments: number[], centroids: number[][], k: number): number {
+  const compactness = centroids.map((centroid, i) => {
+    const members = data.filter((_, idx) => assignments[idx] === i)
+    if (members.length === 0) return 0
+    const sumDist = members.reduce((acc, m) => acc + euclideanDistance(m, centroid), 0)
+    return sumDist / members.length
+  })
 
-  if (rawData.length < k) {
-    throw new Error(`Jumlah data (${rawData.length}) lebih sedikit dari jumlah cluster (${k})`)
+  let total = 0
+  for (let i = 0; i < k; i++) {
+    let maxRatio = -Infinity
+    for (let j = 0; j < k; j++) {
+      if (i === j) continue
+      const centroidDist = euclideanDistance(centroids[i], centroids[j])
+      if (centroidDist === 0) continue
+      const ratio = (compactness[i] + compactness[j]) / centroidDist
+      if (ratio > maxRatio) maxRatio = ratio
+    }
+    total += maxRatio === -Infinity ? 0 : maxRatio
   }
 
-  const { normalized, params } = normalization === 'minmax' ? normalizeMinMax(rawData) : normalizeZScore(rawData)
-  const rand = mulberry32(seed)
+  return total / k
+}
 
+function runSingleKMeans(normalized: number[][], k: number, init: InitMethod, seed: number, maxIterations: number, tolerance: number) {
+  const rand = mulberry32(seed)
   let centroids = init === 'kmeans++' ? initKMeansPlusPlus(normalized, k, rand) : initRandom(normalized, k, rand)
   let assignments = new Array(normalized.length).fill(-1)
-  let iterations = 0
 
   for (let iter = 0; iter < maxIterations; iter++) {
-    iterations = iter + 1
     let changed = false
 
     const newAssignments = normalized.map((point) => {
@@ -195,8 +207,74 @@ export function runKMeans(rawData: number[][], options: KMeansOptions): KMeansRe
   }
 
   const sse = normalized.reduce((acc, point, i) => acc + euclideanDistance(point, centroids[assignments[i]]) ** 2, 0)
+  return { assignments, centroids, sse }
+}
+
+// Setara KMeans(n_clusters=k, random_state=42, n_init=10) di sklearn:
+// jalankan berkali-kali dengan seed berbeda, ambil hasil SSE (inertia) terkecil.
+export function runKMeans(rawData: number[][], options: KMeansOptions): KMeansResult {
+  const {
+    k, normalization = 'zscore', init = 'kmeans++',
+    maxIterations = 300, tolerance = 1e-4, seed = 42,
+  } = options
+
+  if (rawData.length < k) {
+    throw new Error(`Jumlah data (${rawData.length}) lebih sedikit dari jumlah cluster (${k})`)
+  }
+
+  const { normalized, params } = normalization === 'minmax' ? normalizeMinMax(rawData) : normalizeZScore(rawData)
+
+  const RESTARTS = 10 // setara n_init=10
+  let best: { assignments: number[]; centroids: number[][]; sse: number } | null = null
+
+  for (let r = 0; r < RESTARTS; r++) {
+    const result = runSingleKMeans(normalized, k, init, seed + r * 997, maxIterations, tolerance)
+    if (!best || result.sse < best.sse) best = result
+  }
+
+  const { assignments, centroids, sse } = best!
   const silhouetteScore = computeSilhouette(normalized, assignments, k)
+  const daviesBouldinIndex = computeDaviesBouldin(normalized, assignments, centroids, k)
   const centroidsDenormalized = centroids.map((c) => denormalize(c, normalization, params))
 
-  return { assignments, centroids: centroidsDenormalized, centroidsNormalized: centroids, iterations, sse, silhouetteScore, normalization: { method: normalization, params } }
+  return {
+    assignments, centroids: centroidsDenormalized, centroidsNormalized: centroids,
+    iterations: RESTARTS, sse, silhouetteScore, daviesBouldinIndex,
+    normalization: { method: normalization, params },
+  }
+}
+
+// Evaluasi K=2..10 untuk kurva Elbow + Silhouette (mendukung tahap 9-11 di notebook Python)
+export function evaluateKRange(rawData: number[][], kRange: number[] = [2,3,4,5,6,7,8,9,10]) {
+  const { normalized } = normalizeZScore(rawData)
+  const results: { k: number; inertia: number; silhouette: number }[] = []
+
+  for (const k of kRange) {
+    if (rawData.length <= k) continue
+    let best: { assignments: number[]; centroids: number[][]; sse: number } | null = null
+    for (let r = 0; r < 10; r++) {
+      const result = runSingleKMeans(normalized, k, 'kmeans++', 42 + r * 997, 300, 1e-4)
+      if (!best || result.sse < best.sse) best = result
+    }
+    const silhouette = computeSilhouette(normalized, best!.assignments, k)
+    results.push({ k, inertia: best!.sse, silhouette })
+  }
+
+  return results
+}
+
+// Mengurutkan cluster berdasarkan skor rata-rata (z-score) lalu memberi label sesuai urutan.
+// labels harus diurutkan dari kategori TERENDAH ke TERTINGGI.
+export function labelClustersByRank(centroidsNormalized: number[][], labels: string[]): Record<number, string> {
+  const scores = centroidsNormalized.map((c, idx) => ({
+    idx,
+    score: c.reduce((a, b) => a + b, 0) / c.length,
+  }))
+  scores.sort((a, b) => a.score - b.score)
+
+  const map: Record<number, string> = {}
+  scores.forEach((s, rank) => {
+    map[s.idx] = labels[rank] ?? `Cluster ${s.idx + 1}`
+  })
+  return map
 }
