@@ -51,3 +51,32 @@ export function computeHistogram(values: number[], binCount = 10): HistogramBin[
 
   return bins
 }
+
+// Korelasi Pearson — setara df.corr(method="pearson") di pandas
+export function pearsonCorrelation(x: number[], y: number[]): number {
+  const n = Math.min(x.length, y.length)
+  if (n === 0) return 0
+
+  const meanX = x.reduce((a, b) => a + b, 0) / n
+  const meanY = y.reduce((a, b) => a + b, 0) / n
+
+  let num = 0, denomX = 0, denomY = 0
+  for (let i = 0; i < n; i++) {
+    const dx = x[i] - meanX
+    const dy = y[i] - meanY
+    num += dx * dy
+    denomX += dx * dx
+    denomY += dy * dy
+  }
+
+  const denom = Math.sqrt(denomX * denomY)
+  return denom === 0 ? 0 : num / denom
+}
+
+export function computeCorrelationMatrix(data: Record<string, number[]>): { labels: string[]; matrix: number[][] } {
+  const labels = Object.keys(data)
+  const matrix = labels.map((rowLabel) =>
+    labels.map((colLabel) => pearsonCorrelation(data[rowLabel], data[colLabel]))
+  )
+  return { labels, matrix }
+}

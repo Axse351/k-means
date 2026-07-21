@@ -1,17 +1,25 @@
 import { getClusteringResult } from '@/lib/actions/clustering'
 import ClusteringCharts from '@/components/ClusteringCharts'
-import Link from 'next/link'
 import ClusteringDetailCharts from '@/components/ClusteringDetailCharts'
+import Link from 'next/link'
 
 const PAGE_SIZE = 10
+const EXCLUDED_PAGE_SIZE = 10
 const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6']
 
 export default async function ClusteringHasilPage({
   searchParams,
 }: {
-  searchParams: Promise<{ runId?: string; page?: string; q?: string; prodi?: string; cluster?: string }>
+  searchParams: Promise<{
+    runId?: string
+    page?: string
+    q?: string
+    prodi?: string
+    cluster?: string
+    excludedPage?: string
+  }>
 }) {
-  const { runId, page, q, prodi, cluster } = await searchParams
+  const { runId, page, q, prodi, cluster, excludedPage } = await searchParams
 
   if (!runId) {
     return (
@@ -40,14 +48,19 @@ export default async function ClusteringHasilPage({
   const { run, results, centroids } = data
   const allResults = results as any[]
   const excludedData = (run.excluded_data as any[]) ?? []
+  const varList = (run.variabel as string[]) ?? []
+  const table = run.tipe === 'akademik' ? 'data_akademik' : 'data_non_akademik'
 
   // ── Distribusi cluster (untuk pie chart) ──
   const distribusi: Record<number, number> = {}
   for (const r of allResults) distribusi[r.cluster] = (distribusi[r.cluster] ?? 0) + 1
+  const clusterLabels = Array.from({ length: run.k }, (_, i) => {
+    return allResults.find((r) => r.cluster === i)?.label ?? `Cluster ${i + 1}`
+  })
   const distribusiData = Object.entries(distribusi)
     .sort((a, b) => Number(a[0]) - Number(b[0]))
     .map(([clusterIdx, jumlah]) => ({
-      cluster: allResults.find((r) => r.cluster === Number(clusterIdx))?.label ?? `Cluster ${Number(clusterIdx) + 1}`,
+      cluster: clusterLabels[Number(clusterIdx)],
       jumlah,
       persentase: Math.round((jumlah / allResults.length) * 100),
     }))
@@ -59,23 +72,20 @@ export default async function ClusteringHasilPage({
     if (!perProdiMap[p]) perProdiMap[p] = {}
     perProdiMap[p][r.cluster] = (perProdiMap[p][r.cluster] ?? 0) + 1
   }
-  const clusterLabels = Array.from({ length: run.k }, (_, i) => {
-    return allResults.find((r) => r.cluster === i)?.label ?? `Cluster ${i + 1}`
-  })
   const perProdiData = Object.entries(perProdiMap).map(([p, clusters]) => ({
     prodi: p,
     ...Object.fromEntries(clusterLabels.map((label, i) => [label, clusters[i] ?? 0])),
   }))
 
-  // ── Centroid: nilai asli + versi ternormalisasi 0-100 untuk radar chart ──
+  // ── Centroid: nilai asli + versi ternormalisasi 0-100 untuk radar/bar chart ──
   const centroidByCluster: Record<number, Record<string, number>> = {}
   for (const c of centroids as any[]) {
     if (!centroidByCluster[c.cluster]) centroidByCluster[c.cluster] = {}
     centroidByCluster[c.cluster][c.variabel] = c.nilai
   }
-  const variabelList = [...new Set((centroids as any[]).map((c) => c.variabel))]
+  const variabelListCentroid = [...new Set((centroids as any[]).map((c) => c.variabel))]
 
-  const radarData = variabelList.map((variabel) => {
+  const radarData = variabelListCentroid.map((variabel) => {
     const rawValues = Array.from({ length: run.k }, (_, i) => centroidByCluster[i]?.[variabel] ?? 0)
     const min = Math.min(...rawValues)
     const max = Math.max(...rawValues)
@@ -89,7 +99,49 @@ export default async function ClusteringHasilPage({
     return row
   })
 
-  // ── Filter + pagination untuk tabel ──
+  // ── Detail rows untuk histogram, boxplot, scatter, korelasi ──
+  const detailRows = allResults.map((r: any) => {
+    const rel = Array.isArray(r.mahasiswa?.[table]) ? r.mahasiswa[table][0] : r.mahasiswa?.[table]
+    const values: Record<string, number> = {}
+    for (const v of varList) {
+      values[v] = rel ? Number(rel[v]) : NaN
+    }
+    return {
+      cluster: r.cluster,
+      label: r.label ?? `Cluster ${r.cluster + 1}`,
+      values,
+      nama: r.mahasiswa?.nama ?? '-',
+      jenisKelamin: r.mahasiswa?.jenis_kelamin,
+    }
+  })
+
+  let correlationMatrix: { labels: string[]; matrix: number[][] } | null = null
+  if (varList.length >= 2) {
+    const dataPerVar: Record<string, number[]> = {}
+    varList.forEach((v) => {
+      dataPerVar[v] = detailRows.map((r) => r.values[v]).filter((n) => !isNaN(n))
+    })
+    const matrix = varList.map((rowLabel) =>
+      varList.map((colLabel) => {
+        const x = dataPerVar[rowLabel]
+        const y = dataPerVar[colLabel]
+        const n = Math.min(x.length, y.length)
+        if (n === 0) return 0
+        const meanX = x.reduce((a, b) => a + b, 0) / n
+        const meanY = y.reduce((a, b) => a + b, 0) / n
+        let num = 0, dx2 = 0, dy2 = 0
+        for (let i = 0; i < n; i++) {
+          const dx = x[i] - meanX, dy = y[i] - meanY
+          num += dx * dy; dx2 += dx * dx; dy2 += dy * dy
+        }
+        const denom = Math.sqrt(dx2 * dy2)
+        return denom === 0 ? 0 : num / denom
+      })
+    )
+    correlationMatrix = { labels: varList, matrix }
+  }
+
+  // ── Filter + pagination untuk tabel utama ──
   let filtered = allResults
   if (q) {
     const qLower = q.toLowerCase()
@@ -113,7 +165,25 @@ export default async function ClusteringHasilPage({
     if (q) params.set('q', q)
     if (prodi) params.set('prodi', prodi)
     if (cluster) params.set('cluster', cluster)
+    if (excludedPage) params.set('excludedPage', excludedPage)
     params.set('page', String(p))
+    return `?${params.toString()}`
+  }
+
+  // ── Pagination untuk data dikecualikan ──
+  const excludedCurrentPage = Number(excludedPage) || 1
+  const excludedTotalPages = Math.max(1, Math.ceil(excludedData.length / EXCLUDED_PAGE_SIZE))
+  const excludedFrom = (excludedCurrentPage - 1) * EXCLUDED_PAGE_SIZE
+  const excludedPaginated = excludedData.slice(excludedFrom, excludedFrom + EXCLUDED_PAGE_SIZE)
+
+  const buildExcludedPageLink = (p: number) => {
+    const params = new URLSearchParams()
+    params.set('runId', runId)
+    if (q) params.set('q', q)
+    if (prodi) params.set('prodi', prodi)
+    if (cluster) params.set('cluster', cluster)
+    if (page) params.set('page', page)
+    params.set('excludedPage', String(p))
     return `?${params.toString()}`
   }
 
@@ -138,50 +208,39 @@ export default async function ClusteringHasilPage({
           value={run.silhouette_score?.toFixed(3) ?? '-'}
           hint={silhouetteHint(run.silhouette_score)}
         />
-        <StatCard
-          label="Davies-Bouldin Index"
-          value={run.dbi_score?.toFixed(4) ?? '-'}
-          hint={dbiHint(run.dbi_score)}
-        />
+        <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col justify-between">
+          <div>
+            <p className="text-xs text-gray-400">Davies-Bouldin Index</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{run.dbi_score?.toFixed(4) ?? '-'}</p>
+          </div>
+          <Link href={`/admin/clustering/evaluasi?runId=${runId}`} className="text-xs text-blue-600 hover:underline mt-1">
+            Lihat detail evaluasi →
+          </Link>
+        </div>
         <StatCard label="Data Dikecualikan" value={excludedData.length} />
       </div>
 
       <ClusteringCharts distribusi={distribusiData} perProdi={perProdiData} radar={radarData} k={run.k} />
-{(() => {
-  const table = run.tipe === 'akademik' ? 'data_akademik' : 'data_non_akademik'
-  const detailRows = allResults.map((r: any) => {
-    const rel = Array.isArray(r.mahasiswa?.[table]) ? r.mahasiswa[table][0] : r.mahasiswa?.[table]
-    const values: Record<string, number> = {}
-    for (const v of run.variabel as string[]) {
-      values[v] = rel ? Number(rel[v]) : NaN
-    }
-    return {
-      cluster: r.cluster,
-      label: r.label ?? `Cluster ${r.cluster + 1}`,
-      values,
-      nama: r.mahasiswa?.nama ?? '-',
-      jenisKelamin: r.mahasiswa?.jenis_kelamin,
-    }
-  })
 
-  return (
-    <ClusteringDetailCharts
-      variabelList={run.variabel as string[]}
-      rows={detailRows}
-      k={run.k}
-    />
-  )
-})()}
-      {/* ── Data yang dikecualikan karena tidak lengkap ── */}
+      <ClusteringDetailCharts
+        variabelList={varList}
+        rows={detailRows}
+        k={run.k}
+        correlationMatrix={correlationMatrix}
+      />
+
       {excludedData.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl mt-6 p-5">
-          <h3 className="font-semibold text-amber-900 mb-1">
-            ⚠️ Data Dikecualikan dari Proses ({excludedData.length})
-          </h3>
-          <p className="text-xs text-amber-700 mb-3">
-            Mahasiswa berikut tidak diikutkan dalam clustering karena datanya belum lengkap.
-          </p>
-          <div className="overflow-x-auto">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl mt-6 overflow-hidden">
+          <div className="p-5 pb-3">
+            <h3 className="font-semibold text-amber-900 mb-1">
+              ⚠️ Data Dikecualikan dari Proses ({excludedData.length})
+            </h3>
+            <p className="text-xs text-amber-700">
+              Mahasiswa berikut tidak diikutkan dalam clustering karena datanya belum lengkap.
+            </p>
+          </div>
+
+          <div className="overflow-x-auto px-5">
             <table className="w-full text-sm">
               <thead className="text-left text-amber-800">
                 <tr>
@@ -192,7 +251,7 @@ export default async function ClusteringHasilPage({
                 </tr>
               </thead>
               <tbody>
-                {excludedData.map((ex: any, i: number) => (
+                {excludedPaginated.map((ex: any, i: number) => (
                   <tr key={i} className="border-t border-amber-200">
                     <td className="py-1.5 pr-4">{ex.nim}</td>
                     <td className="py-1.5 pr-4">{ex.nama}</td>
@@ -203,10 +262,44 @@ export default async function ClusteringHasilPage({
               </tbody>
             </table>
           </div>
+
+          <div className="flex flex-wrap justify-between items-center gap-3 px-5 py-4 mt-2 border-t border-amber-200 text-sm text-amber-700">
+            <p>
+              Menampilkan {excludedFrom + 1}-{Math.min(excludedFrom + EXCLUDED_PAGE_SIZE, excludedData.length)} dari {excludedData.length} data
+            </p>
+            <div className="flex gap-1">
+              <Link
+                href={buildExcludedPageLink(Math.max(1, excludedCurrentPage - 1))}
+                className={`px-3 py-1.5 rounded-lg border border-amber-300 ${excludedCurrentPage === 1 ? 'pointer-events-none opacity-40' : 'hover:bg-amber-100'}`}
+              >
+                ‹
+              </Link>
+              {Array.from({ length: excludedTotalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === excludedTotalPages || Math.abs(p - excludedCurrentPage) <= 1)
+                .map((p, idx, arr) => (
+                  <span key={p} className="flex items-center gap-1">
+                    {idx > 0 && arr[idx - 1] !== p - 1 && <span className="px-1 text-amber-400">...</span>}
+                    <Link
+                      href={buildExcludedPageLink(p)}
+                      className={`px-3 py-1.5 rounded-lg ${
+                        p === excludedCurrentPage ? 'bg-amber-600 text-white font-medium' : 'border border-amber-300 hover:bg-amber-100'
+                      }`}
+                    >
+                      {p}
+                    </Link>
+                  </span>
+                ))}
+              <Link
+                href={buildExcludedPageLink(Math.min(excludedTotalPages, excludedCurrentPage + 1))}
+                className={`px-3 py-1.5 rounded-lg border border-amber-300 ${excludedCurrentPage === excludedTotalPages ? 'pointer-events-none opacity-40' : 'hover:bg-amber-100'}`}
+              >
+                ›
+              </Link>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* ── Tabel hasil dengan filter + pagination ── */}
       <div className="bg-white border border-gray-200 rounded-xl mt-6 overflow-hidden">
         <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center justify-between">
           <h3 className="font-semibold text-gray-900">Detail Hasil per Mahasiswa</h3>
@@ -270,7 +363,6 @@ export default async function ClusteringHasilPage({
           </tbody>
         </table>
 
-        {/* Pagination */}
         <div className="flex flex-wrap justify-between items-center gap-3 p-4 border-t border-gray-100 text-sm text-gray-500">
           <p>
             Menampilkan {filtered.length === 0 ? 0 : from + 1}-{Math.min(from + PAGE_SIZE, filtered.length)} dari {filtered.length} data
@@ -326,11 +418,4 @@ function silhouetteHint(score?: number | null) {
   if (score >= 0.5) return 'Struktur cluster cukup baik'
   if (score >= 0.25) return 'Struktur cluster lemah'
   return 'Cluster tumpang tindih'
-}
-
-function dbiHint(dbi?: number | null) {
-  if (dbi === null || dbi === undefined) return undefined
-  if (dbi < 0.5) return 'Kualitas cluster sangat baik'
-  if (dbi <= 1) return 'Kualitas cluster baik'
-  return 'Kualitas cluster kurang baik'
 }

@@ -49,7 +49,6 @@ function normalizeMinMax(data: number[][]) {
   return { normalized, params: { min, max } }
 }
 
-// Setara StandardScaler (Z-Score) di sklearn Python
 function normalizeZScore(data: number[][]) {
   const nCols = data[0].length
   const mean = new Array(nCols).fill(0)
@@ -143,7 +142,6 @@ function computeSilhouette(data: number[][], assignments: number[], k: number): 
   return scores.reduce((a, b) => a + b, 0) / scores.length
 }
 
-// Davies-Bouldin Index — makin kecil makin baik (mendekati 0 = sangat baik)
 function computeDaviesBouldin(data: number[][], assignments: number[], centroids: number[][], k: number): number {
   const compactness = centroids.map((centroid, i) => {
     const members = data.filter((_, idx) => assignments[idx] === i)
@@ -210,8 +208,6 @@ function runSingleKMeans(normalized: number[][], k: number, init: InitMethod, se
   return { assignments, centroids, sse }
 }
 
-// Setara KMeans(n_clusters=k, random_state=42, n_init=10) di sklearn:
-// jalankan berkali-kali dengan seed berbeda, ambil hasil SSE (inertia) terkecil.
 export function runKMeans(rawData: number[][], options: KMeansOptions): KMeansResult {
   const {
     k, normalization = 'zscore', init = 'kmeans++',
@@ -224,7 +220,7 @@ export function runKMeans(rawData: number[][], options: KMeansOptions): KMeansRe
 
   const { normalized, params } = normalization === 'minmax' ? normalizeMinMax(rawData) : normalizeZScore(rawData)
 
-  const RESTARTS = 10 // setara n_init=10
+  const RESTARTS = 10
   let best: { assignments: number[]; centroids: number[][]; sse: number } | null = null
 
   for (let r = 0; r < RESTARTS; r++) {
@@ -244,10 +240,9 @@ export function runKMeans(rawData: number[][], options: KMeansOptions): KMeansRe
   }
 }
 
-// Evaluasi K=2..10 untuk kurva Elbow + Silhouette (mendukung tahap 9-11 di notebook Python)
 export function evaluateKRange(rawData: number[][], kRange: number[] = [2,3,4,5,6,7,8,9,10]) {
   const { normalized } = normalizeZScore(rawData)
-  const results: { k: number; inertia: number; silhouette: number }[] = []
+  const results: { k: number; inertia: number; silhouette: number; dbi: number }[] = []
 
   for (const k of kRange) {
     if (rawData.length <= k) continue
@@ -257,14 +252,13 @@ export function evaluateKRange(rawData: number[][], kRange: number[] = [2,3,4,5,
       if (!best || result.sse < best.sse) best = result
     }
     const silhouette = computeSilhouette(normalized, best!.assignments, k)
-    results.push({ k, inertia: best!.sse, silhouette })
+    const dbi = computeDaviesBouldin(normalized, best!.assignments, best!.centroids, k)
+    results.push({ k, inertia: best!.sse, silhouette, dbi })
   }
 
   return results
 }
 
-// Mengurutkan cluster berdasarkan skor rata-rata (z-score) lalu memberi label sesuai urutan.
-// labels harus diurutkan dari kategori TERENDAH ke TERTINGGI.
 export function labelClustersByRank(centroidsNormalized: number[][], labels: string[]): Record<number, string> {
   const scores = centroidsNormalized.map((c, idx) => ({
     idx,

@@ -1,9 +1,10 @@
 'use client'
-
+import React from 'react'
 import HistogramChart from './HistogramChart'
 import BoxplotChart from './BoxplotChart'
 import ScatterClusterChart from './ScatterClusterChart'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts'
+import HeatmapGrid from './HeatmapGrid'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { computeHistogram, computeBoxplotStats } from '@/lib/statUtils'
 
 const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6']
@@ -20,20 +21,20 @@ export default function ClusteringDetailCharts({
   variabelList,
   rows,
   k,
+  correlationMatrix,
 }: {
   variabelList: string[]
   rows: ResultRow[]
   k: number
+  correlationMatrix?: { labels: string[]; matrix: number[][] } | null
 }) {
   const clusterLabels = Array.from({ length: k }, (_, i) => rows.find((r) => r.cluster === i)?.label ?? `Cluster ${i + 1}`)
 
-  // ── Histogram distribusi keseluruhan per variabel ──
   const histograms = variabelList.map((v) => ({
     variabel: v,
     bins: computeHistogram(rows.map((r) => r.values[v]).filter((n) => !isNaN(n))),
   }))
 
-  // ── Boxplot per cluster per variabel ──
   const boxplots = variabelList.map((v) => ({
     variabel: v,
     groups: Array.from({ length: k }, (_, i) => {
@@ -46,7 +47,6 @@ export default function ClusteringDetailCharts({
     }),
   }))
 
-  // ── Scatter: 2 variabel pertama (akademik), atau index vs nilai (non-akademik 1 variabel) ──
   const scatterSeries = Array.from({ length: k }, (_, i) => {
     const members = rows
       .map((r, idx) => ({ r, idx }))
@@ -62,7 +62,6 @@ export default function ClusteringDetailCharts({
     }
   })
 
-  // ── Breakdown per jenis kelamin ──
   const genderMap: Record<string, Record<number, number>> = {}
   for (const r of rows) {
     const g = r.jenisKelamin === 'P' ? 'Perempuan' : r.jenisKelamin === 'L' ? 'Laki-laki' : '-'
@@ -74,7 +73,6 @@ export default function ClusteringDetailCharts({
     ...Object.fromEntries(clusterLabels.map((label, i) => [label, clusters[i] ?? 0])),
   }))
 
-  // ── Ringkasan statistik per cluster (jumlah, rata-rata tiap variabel, min, max variabel pertama) ──
   const ringkasan = Array.from({ length: k }, (_, i) => {
     const members = rows.filter((r) => r.cluster === i)
     const row: any = { label: clusterLabels[i], jumlah: members.length }
@@ -86,6 +84,13 @@ export default function ClusteringDetailCharts({
     }
     return row
   })
+
+  const heatmapClusterValues = clusterLabels.map((_, i) =>
+    variabelList.map((v) => {
+      const values = rows.filter((r) => r.cluster === i).map((r) => r.values[v]).filter((n) => !isNaN(n))
+      return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0
+    })
+  )
 
   return (
     <div className="space-y-6 mt-6">
@@ -109,8 +114,63 @@ export default function ClusteringDetailCharts({
         </div>
       </div>
 
-      {/* Scatter plot */}
-      <div className="grid grid-cols-1 gap-4">
+      {/* Korelasi antar variabel */}
+      {correlationMatrix && correlationMatrix.labels.length >= 2 && (
+        <div>
+          <h3 className="font-semibold text-gray-900 mb-3">Korelasi Antar Variabel</h3>
+          <HeatmapGrid
+            title="Matriks Korelasi Pearson"
+            rowLabels={correlationMatrix.labels}
+            colLabels={correlationMatrix.labels}
+            values={correlationMatrix.matrix}
+            colorScale="diverging"
+          />
+        </div>
+      )}
+
+      {/* Heatmap karakteristik cluster */}
+      <div>
+        <h3 className="font-semibold text-gray-900 mb-3">Heatmap Karakteristik Cluster</h3>
+        <HeatmapGrid
+          title="Rata-rata Nilai Variabel per Cluster"
+          rowLabels={clusterLabels}
+          colLabels={variabelList}
+          values={heatmapClusterValues}
+          colorScale="sequential"
+        />
+      </div>
+
+      {/* Pairplot */}
+      {variabelList.length >= 2 && (
+        <div>
+          <h3 className="font-semibold text-gray-900 mb-3">Hubungan Antar Variabel Berdasarkan Cluster (Pairplot)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {variabelList.flatMap((v1, i) =>
+              variabelList.slice(i + 1).map((v2) => {
+                const series = Array.from({ length: k }, (_, ci) => ({
+                  label: clusterLabels[ci],
+                  data: rows
+                    .filter((r) => r.cluster === ci)
+                    .map((r) => ({ x: r.values[v1], y: r.values[v2], nama: r.nama })),
+                }))
+                return (
+                  <ScatterClusterChart
+                    key={`${v1}-${v2}`}
+                    title={`${v1} vs ${v2}`}
+                    xLabel={v1}
+                    yLabel={v2}
+                    series={series}
+                  />
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Scatter utama (2 variabel pertama, atau index vs nilai jika 1 variabel) */}
+      <div>
+        <h3 className="font-semibold text-gray-900 mb-3">Visualisasi Hasil Clustering</h3>
         <ScatterClusterChart
           title={variabelList.length >= 2 ? `Persebaran Mahasiswa: ${variabelList[0]} vs ${variabelList[1]}` : `Persebaran Mahasiswa Berdasarkan ${variabelList[0]}`}
           xLabel={variabelList.length >= 2 ? variabelList[0] : 'Urutan Mahasiswa'}
@@ -155,11 +215,11 @@ export default function ClusteringDetailCharts({
                 <th className="px-3 pb-2"></th>
                 <th className="px-3 pb-2"></th>
                 {variabelList.map((v) => (
-                  <>
-                    <th key={`${v}-mean`} className="px-3 pb-2">Rata-rata</th>
-                    <th key={`${v}-min`} className="px-3 pb-2">Min</th>
-                    <th key={`${v}-max`} className="px-3 pb-2">Max</th>
-                  </>
+                  <React.Fragment key={v}>
+                    <th className="px-3 pb-2">Rata-rata</th>
+                    <th className="px-3 pb-2">Min</th>
+                    <th className="px-3 pb-2">Max</th>
+                  </React.Fragment>
                 ))}
               </tr>
             </thead>
@@ -169,11 +229,11 @@ export default function ClusteringDetailCharts({
                   <td className="p-3 font-medium">{r.label}</td>
                   <td className="p-3">{r.jumlah}</td>
                   {variabelList.map((v) => (
-                    <>
-                      <td key={`${v}-mean-${i}`} className="p-3">{r[`${v}_mean`]}</td>
-                      <td key={`${v}-min-${i}`} className="p-3">{r[`${v}_min`]}</td>
-                      <td key={`${v}-max-${i}`} className="p-3">{r[`${v}_max`]}</td>
-                    </>
+                    <React.Fragment key={v}>
+                      <td className="p-3">{r[`${v}_mean`]}</td>
+                      <td className="p-3">{r[`${v}_min`]}</td>
+                      <td className="p-3">{r[`${v}_max`]}</td>
+                    </React.Fragment>
                   ))}
                 </tr>
               ))}

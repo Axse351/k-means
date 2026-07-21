@@ -2,11 +2,10 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { runKMeans, evaluateKRange, labelClustersByRank } from '@/lib/kmeans'
+import { computeCorrelationMatrix } from '@/lib/statUtils'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 
-// Variabel & label SESUAI hasil analisis di notebook Python — tidak lagi bisa dipilih bebas,
-// karena sudah melalui uji korelasi & analisis deskriptif yang menentukan variabel final ini.
 const AKADEMIK_VARIABEL = ['ipk', 'ips_terakhir', 'rata_rata_kehadiran']
 const AKADEMIK_LABELS = ['Performa Rendah', 'Performa Sedang', 'Performa Tinggi']
 
@@ -24,6 +23,7 @@ type EvaluationPoint = {
   k: number
   inertia: number
   silhouette: number
+  dbi: number
 }
 
 type ClusterEvaluationSuccess = {
@@ -221,4 +221,37 @@ export async function getAllClusteringRuns(params: { tipe?: string; page?: numbe
 
   if (error) return { runs: [], count: 0 }
   return { runs: data ?? [], count: count ?? 0 }
+}
+
+export async function getRunEvaluationDetail(runId: string) {
+  const supabase = await createClient()
+  const { data: run } = await supabase.from('clustering_runs').select('*').eq('id', runId).single()
+  if (!run) return null
+
+  const { validRows, variabel } = await fetchDataset({
+    tipe: run.tipe,
+    k: run.k,
+    prodi: run.filter_prodi ?? undefined,
+    angkatan: run.filter_angkatan ?? undefined,
+  })
+
+  if (validRows.length < 3) {
+    return { run, kCurve: [], correlationMatrix: null }
+  }
+
+  const matrix = validRows.map((r: any) => variabel.map((v: string) => Number(r._rel[v])))
+  const kMax = Math.min(10, validRows.length - 1)
+  const kRange = Array.from({ length: Math.max(0, kMax - 1) }, (_, i) => i + 2)
+  const kCurve = evaluateKRange(matrix, kRange)
+
+  let correlationMatrix = null
+  if (variabel.length >= 2) {
+    const dataPerVar: Record<string, number[]> = {}
+    variabel.forEach((v: string, i: number) => {
+      dataPerVar[v] = matrix.map((row) => row[i])
+    })
+    correlationMatrix = computeCorrelationMatrix(dataPerVar)
+  }
+
+  return { run, kCurve, correlationMatrix }
 }
